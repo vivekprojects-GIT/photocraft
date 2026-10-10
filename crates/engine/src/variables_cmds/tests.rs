@@ -322,6 +322,37 @@ fn export_data_sets_as_files() {
 }
 
 #[test]
+fn export_data_sets_never_overwrites_its_own_files() {
+    // #2394: `a b` and `a_b` both sanitise to `a_b`, and a template without `{name}`/`{index}`
+    // gives every set one name: each set still gets its own file, and the reply lists them.
+    let (mut s, _p, badge, _t) = session();
+    s.execute("image.variables.define", json!({"defs": [{"name": "showBadge", "layer": badge.0, "type": "visibility"}]})).unwrap();
+    let set = |name: &str, show: bool| json!({"name": name, "values": [{"variable": "showBadge", "kind": "visibility", "value": show}]});
+    s.execute("image.variables.dataSets", json!({"dataSets": [set("a b", true), set("a_b", false), set("A_B", true)]})).unwrap();
+    let badge_px = |path: &str| {
+        let bytes = std::fs::read(path).unwrap();
+        let d = photocraft_io::import(path, &bytes).unwrap().document;
+        photocraft_compose::flatten_to_surface(&d, d.pixel_format(), None).rgba(5, 5)
+    };
+    for (naming, stems) in [(None, ["a_b", "a_b-2", "A_B-3"]), (Some("card"), ["card", "card-2", "card-3"])] {
+        let dir = tmp("collide");
+        let mut p = json!({"dir": dir, "format": "png"});
+        if let Some(n) = naming {
+            p["naming"] = json!(n);
+        }
+        let r = s.execute("file.export.dataSetsAsFiles", p).unwrap();
+        let want: Vec<String> = stems.iter().map(|st| format!("{dir}/{st}.png")).collect();
+        assert_eq!(r["files"], json!(want), "{naming:?}");
+        assert_eq!(r["count"], 3);
+        let red = [1.0, 0.0, 0.0, 1.0];
+        assert_eq!(badge_px(&want[0]), red, "the first set's file survives");
+        assert_ne!(badge_px(&want[1]), red);
+        assert_eq!(badge_px(&want[2]), red);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn pixel_replacement_changes_the_layer() {
     let (mut s, photo, _b, _t) = session();
     // Make a 8x8 solid-blue PNG to drop in.

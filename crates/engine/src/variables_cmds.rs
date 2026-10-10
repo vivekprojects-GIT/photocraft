@@ -376,11 +376,22 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
     let doc_stem = original.name.rsplit_once('.').map_or(original.name.as_str(), |(a, _)| a).to_string();
     let mut files = Vec::new();
+    let mut used = std::collections::HashSet::new();
     for (n, set) in sets.iter().enumerate() {
         let mut doc = (*original).clone();
         apply_to_doc(&mut doc, &vars, set)?;
         let safe: String = set.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
+        let base = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
+        // Two data sets can name the same file (`a b` and `a_b` both sanitise to `a_b`, or a
+        // template without `{name}`/`{index}`): number the later one rather than overwrite an
+        // export this run already wrote (#2394). Case-insensitive, as macOS and Windows file
+        // systems are.
+        let mut stem = base.clone();
+        let mut k = 1;
+        while !used.insert(stem.to_lowercase()) {
+            k += 1;
+            stem = format!("{base}-{k}");
+        }
         let path = format!("{dir}/{stem}.{format}");
         let opts = photocraft_io::ExportOptions::default();
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
